@@ -1,0 +1,106 @@
+name: Daily News Mail
+
+# 동시 실행 방지를 위한 concurrency 설정
+concurrency:
+  group: daily-news-mail
+  cancel-in-progress: true
+
+on:
+  # PowerAutomate에서 트리거
+  repository_dispatch:
+    types: [daily-news-trigger_v2]
+
+  # 수동 트리거 (테스트용)
+  workflow_dispatch:
+    inputs:
+      categories:
+        description: '처리할 카테고리 (쉼표로 구분, 예: Anchor,Growth)'
+        required: false
+        default: 'Anchor'
+
+jobs:
+  send-daily-news:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60  # 60분 타임아웃 설정
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Validate environment variables
+      run: |
+        if [ -z "$POWERAUTOMATE_WEBHOOK_URL" ]; then
+          echo "Error: POWERAUTOMATE_WEBHOOK_URL is not set"
+          exit 1
+        fi
+        if [ -z "$OPENAI_API_KEY" ]; then
+          echo "Warning: OPENAI_API_KEY is not set"
+        fi
+        echo "Environment variables validated"
+      env:
+        POWERAUTOMATE_WEBHOOK_URL: ${{ secrets.POWERAUTOMATE_WEBHOOK_URL }}
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    
+    - name: Run news collection and email
+      id: news_processing
+      env:
+        POWERAUTOMATE_WEBHOOK_URL: ${{ secrets.POWERAUTOMATE_WEBHOOK_URL }}
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        # PowerAutomate에서 전달된 이메일 설정
+        EMAIL_SETTINGS_JSON: ${{ toJson(github.event.client_payload.email_settings) }}
+        # PowerAutomate에서 전달된 SharePoint 설정
+        SHAREPOINT_SETTINGS_JSON: ${{ toJson(github.event.client_payload.sharepoint_settings) }}
+      run: |
+        # PowerAutomate에서 전달된 카테고리 또는 workflow_dispatch 입력값 사용
+        if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+          CATEGORIES="${{ github.event.client_payload.categories }}"
+          # 이메일 설정이 전달된 경우 환경변수로 설정
+          if [ -n "$EMAIL_SETTINGS_JSON" ] && [ "$EMAIL_SETTINGS_JSON" != "null" ]; then
+            echo "PowerAutomate에서 이메일 설정이 전달되었습니다."
+            export POWERAUTOMATE_EMAIL_SETTINGS="$EMAIL_SETTINGS_JSON"
+          fi
+          # SharePoint 설정이 전달된 경우 환경변수로 설정
+          if [ -n "$SHAREPOINT_SETTINGS_JSON" ] && [ "$SHAREPOINT_SETTINGS_JSON" != "null" ]; then
+            echo "PowerAutomate에서 SharePoint 설정이 전달되었습니다."
+            export POWERAUTOMATE_SHAREPOINT_SETTINGS="$SHAREPOINT_SETTINGS_JSON"
+          fi
+        else
+          CATEGORIES="${{ github.event.inputs.categories }}"
+        fi
+        
+        if [ -n "$CATEGORIES" ]; then
+          echo "카테고리 지정됨: $CATEGORIES"
+          python auto_news_mail.py --mode=github-actions --categories=$CATEGORIES
+        else
+          echo "카테고리 지정되지 않음. 기본값 사용."
+          python auto_news_mail.py --mode=github-actions
+        fi
+        echo "News processing completed successfully"
+    
+    - name: Handle failure
+      if: failure()
+      env:
+        POWERAUTOMATE_WEBHOOK_URL: ${{ secrets.POWERAUTOMATE_WEBHOOK_URL }}
+      run: |
+        echo "News processing failed"
+        if [ -n "$POWERAUTOMATE_WEBHOOK_URL" ]; then
+          curl -X POST "$POWERAUTOMATE_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "status": "failed",
+              "execution_date": "'$(date -u +"%Y-%m-%d")'",
+              "execution_time": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'",
+              "error": "GitHub Actions workflow failed",
+              "mode": "error_notification"
+            }' || echo "Failed to send error notification"
+        fi
