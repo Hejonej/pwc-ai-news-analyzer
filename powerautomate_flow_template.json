@@ -1,0 +1,284 @@
+{
+  "recurrence_trigger": {
+    "type": "Recurrence",
+    "recurrence": {
+      "frequency": "Day",
+      "interval": 1,
+      "timeZone": "Korea Standard Time",
+      "schedule": {
+        "hours": [
+          "8"
+        ],
+        "weekDays": [
+          "Monday",
+          "Tuesday",
+          "Wednesday",
+          "Thursday",
+          "Friday"
+        ]
+      }
+    }
+  },
+  "github_trigger": {
+    "type": "OpenApiConnection",
+    "inputs": {
+      "parameters": {
+        "repositoryOwner": "kingkang12345",
+        "repositoryName": "news_clipping_mail",
+        "body": {
+          "event_type": "daily-news-trigger",
+          "client_payload": {
+            "categories": "@{variables('selectedCategories')}",
+            "sharepoint_settings": {
+              "Anchor": {
+                "enabled": true,
+                "companies": {
+                  "삼성": {
+                    "site_url": "YOUR_SHAREPOINT_SITE_URL",
+                    "list_id": "YOUR_LIST_ID",
+                    "column_ids": {
+                      "month": "Month",
+                      "date": "Date",
+                      "title": "Title",
+                      "link": "Link"
+                    }
+                  },
+                  "SK": {
+                    "site_url": "YOUR_SHAREPOINT_SITE_URL",
+                    "list_id": "YOUR_LIST_ID",
+                    "column_ids": {
+                      "month": "Month",
+                      "date": "Date",
+                      "title": "Title",
+                      "link": "Link"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "host": {
+        "apiId": "/providers/Microsoft.PowerApps/apis/shared_github",
+        "connection": "shared_github",
+        "operationId": "CreateRepositoryDispatchEvent"
+      }
+    },
+    "runAfter": {
+      "Initialize_selectedCategories": ["Succeeded"]
+    }
+  },
+  "initialize_variable": {
+    "type": "InitializeVariable",
+    "inputs": {
+      "variables": [
+        {
+          "name": "selectedCategories",
+          "type": "array",
+          "value": ["Anchor"]
+        }
+      ]
+    },
+    "runAfter": {}
+  },
+  "email_sharepoint_flow": {
+    "definition": {
+      "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+      "actions": {
+        "메일_보내기(V2)": {
+          "type": "ApiConnection",
+          "inputs": {
+            "host": {
+              "connection": {
+                "referenceName": "office365-1"
+              }
+            },
+            "method": "post",
+            "body": {
+              "To": "@triggerBody()?['to']",
+              "Subject": "@triggerBody()?['subject']",
+              "Body": "@triggerBody()?['body']",
+              "From": "@triggerBody()?['from']",
+              "Cc": "@triggerBody()?['cc']",
+              "Bcc": "@triggerBody()?['bcc']",
+              "Importance": "@triggerBody()?['importance']"
+            },
+            "path": "/v2/Mail"
+          },
+          "runAfter": {}
+        },
+        "SharePoint_항목_처리": {
+          "type": "Foreach",
+          "foreach": "@triggerBody()?['sharepoint_items']",
+          "actions": {
+            "URL_길이_체크": {
+              "type": "If",
+              "expression": {
+                "and": [
+                  {
+                    "lessOrEquals": [
+                      "@length(item()?['data']?['링크'])",
+                      255
+                    ]
+                  }
+                ]
+              },
+              "actions": {
+                "SharePoint에_항목_만들기": {
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "referenceName": "sharepointonline-1"
+                      }
+                    },
+                    "method": "post",
+                    "body": {
+                      "@{item()?['column_ids']?['month']}": "@item()?['data']?['Month']",
+                      "@{item()?['column_ids']?['date']}": "@item()?['data']?['날짜']",
+                      "@{item()?['column_ids']?['title']}": "@item()?['data']?['제목']",
+                      "@{item()?['column_ids']?['link']}": {
+                        "Description": "@item()?['data']?['제목']",
+                        "Url": "@item()?['data']?['링크']"
+                      }
+                    },
+                    "path": "/datasets/@{encodeURIComponent(encodeURIComponent(item()?['site_url']))}/tables/@{encodeURIComponent(encodeURIComponent(item()?['list_id']))}/items"
+                  }
+                }
+              },
+              "else": {
+                "actions": {
+                  "SharePoint에_항목_만들기_단축URL": {
+                    "type": "ApiConnection",
+                    "inputs": {
+                      "host": {
+                        "connection": {
+                          "referenceName": "sharepointonline-1"
+                        }
+                      },
+                      "method": "post",
+                      "body": {
+                        "@{item()?['column_ids']?['month']}": "@item()?['data']?['Month']",
+                        "@{item()?['column_ids']?['date']}": "@item()?['data']?['날짜']",
+                        "@{item()?['column_ids']?['title']}": "@item()?['data']?['제목']",
+                        "@{item()?['column_ids']?['link']}": {
+                          "Description": "@item()?['data']?['제목']",
+                          "Url": "@substring(item()?['data']?['링크'], 0, 250)"
+                        }
+                      },
+                      "path": "/datasets/@{encodeURIComponent(encodeURIComponent(item()?['site_url']))}/tables/@{encodeURIComponent(encodeURIComponent(item()?['list_id']))}/items"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "runAfter": {
+            "메일_보내기(V2)": [
+              "Succeeded"
+            ]
+          }
+        }
+      },
+      "contentVersion": "1.0.0.0",
+      "outputs": {},
+      "triggers": {
+        "When_a_HTTP_request_is_received": {
+          "type": "Request",
+          "kind": "Http",
+          "inputs": {
+            "method": "POST",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "to": {
+                  "type": "string"
+                },
+                "cc": {
+                  "type": "string"
+                },
+                "bcc": {
+                  "type": "string"
+                },
+                "subject": {
+                  "type": "string"
+                },
+                "body": {
+                  "type": "string"
+                },
+                "from": {
+                  "type": "string"
+                },
+                "importance": {
+                  "type": "string",
+                  "enum": [
+                    "Low",
+                    "Normal",
+                    "High"
+                  ]
+                },
+                "sharepoint_items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "company": {
+                        "type": "string"
+                      },
+                      "site_url": {
+                        "type": "string"
+                      },
+                      "list_id": {
+                        "type": "string"
+                      },
+                      "column_ids": {
+                        "type": "object",
+                        "properties": {
+                          "month": {
+                            "type": "string"
+                          },
+                          "date": {
+                            "type": "string"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "link": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "data": {
+                        "type": "object",
+                        "properties": {
+                          "Month": {
+                            "type": "string"
+                          },
+                          "날짜": {
+                            "type": "string"
+                          },
+                          "제목": {
+                            "type": "string"
+                          },
+                          "링크": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "sharepoint_settings": {
+                  "type": "object"
+                }
+              },
+              "required": []
+            }
+          }
+        }
+      }
+    },
+    "kind": "Stateful"
+  }
+}
